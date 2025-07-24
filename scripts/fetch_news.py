@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-fetch_news.py – Daily Brief generator for My daily companion
------------------------------------------------------------
-• Pulls up to 5 headlines per category (Politics, Tech & AI, Finance & Economy, Innovation)
-  from NewsAPI.org, mixing US + selected EU countries.
-• Builds a <article> HTML block with clickable titles, a 1‑2 sentence snippet,
-  and an inline « Voir la suite → » link.
-• Optional extra section "Client Watch" driven by repo variable CLIENT_KEYWORD.
+fetch_news.py – Daily Brief generator for My daily companion (v2.1)
+------------------------------------------------------------------
+• Builds a daily brief with clickable titles, snippet, « Voir la suite → »
+  and an optional “Client Watch” section (driven by CLIENT_KEYWORD variable).
+• Injects the brief *inside* <section id="posts"> and first removes any
+  previous brief (bounded by HTML comments) to avoid duplication.
 
-Required secrets / variables in GitHub Actions:
-  NEWS_KEY         – NewsAPI key (secret)
-  CLIENT_KEYWORD   – optional free‑text query for client monitoring (variable)
+Environment expected by the GitHub Action
+----------------------------------------
+NEWS_KEY (secret)         – NewsAPI.org API key
+CLIENT_KEYWORD (variable) – optional free‑text query (e.g. Purina OR "Nestlé Purina")
 """
 import datetime as _dt
 import html as _html
@@ -18,17 +18,16 @@ import os as _os
 import re as _re
 import sys as _sys
 import textwrap as _tw
-from typing import List, Dict
+from typing import Dict, List
 
 import requests as _r
 
 API_KEY = _os.getenv("NEWS_KEY")
 if not API_KEY:
-    _sys.exit("❌ NEWS_KEY secret not set in GitHub repo")
+    _sys.exit("❌ NEWS_KEY secret missing – add it as a repo secret")
 
 CLIENT_Q = _os.getenv("CLIENT_KEYWORD", "").strip()
 
-# Categories we surface and their NewsAPI categories
 CATS = {
     "World Politics": "general",
     "Tech & AI": "technology",
@@ -36,146 +35,127 @@ CATS = {
     "Innovation": "science",
 }
 
-# Countries to blend (ISO‑2). Free NewsAPI allows only one country per request.
 _US = ["us"]
 _EU = ["gb", "fr", "de", "it", "es", "nl"]
-COUNTRY_ROLL = _US + _EU
+COUNTRIES = _US + _EU
 
 _ENDPOINT_TOP = "https://newsapi.org/v2/top-headlines"
 _ENDPOINT_EVERY = "https://newsapi.org/v2/everything"
-_HEADERS = {"User-Agent": "daily-brief-bot/2.0"}
+_HEADERS = {"User-Agent": "daily-brief-bot/2.1"}
 
 
-def _fetch_top(country: str, category: str) -> List[Dict]:
-    params = {
-        "apiKey": API_KEY,
-        "country": country,
-        "category": category,
-        "pageSize": 20,
-        "language": "en",
-    }
+def _api_get(url: str, **params):
+    params["apiKey"] = API_KEY
     try:
-        data = _r.get(_ENDPOINT_TOP, params=params, headers=_HEADERS, timeout=12).json()
+        r = _r.get(url, params=params, headers=_HEADERS, timeout=12)
+        data = r.json()
         if data.get("status") != "ok":
-            raise RuntimeError(data.get("message", "unknown error"))
-        return data.get("articles", [])
+            raise RuntimeError(data.get("message", "unk error"))
+        return data["articles"]
     except Exception as exc:
-        print(f"⚠️ top-headlines error {country}/{category}: {exc}")
+        print(f"⚠️ API error {url}: {exc}")
         return []
 
 
-def _dedup(arts: List[Dict]) -> List[Dict]:
-    seen = set()
-    out = []
+def _fetch_top(country: str, category: str):
+    return _api_get(_ENDPOINT_TOP, country=country, category=category, pageSize=20, language="en")
+
+
+def _dedup(arts: List[Dict]):
+    out, seen = [], set()
     for a in arts:
         t = a.get("title")
-        if not t or t in seen:
-            continue
-        seen.add(t)
-        out.append(a)
+        if t and t not in seen:
+            seen.add(t)
+            out.append(a)
     return out
 
 
-def _snippet(a: Dict) -> str:
-    cand = a.get("description") or a.get("content") or ""
-    cand = cand.split("[+")[0].strip()
-    return _html.escape(cand[:280])
+def _snippet(a: Dict):
+    raw = a.get("description") or a.get("content") or ""
+    raw = raw.split("[+")[0].strip()
+    return _html.escape(raw[:260])
 
 
-def _fmt_li(art: Dict) -> str:
-    title = _html.escape(art.get("title", ""))
-    url = art.get("url", "#")
-    snippet = _snippet(art)
+def _fmt_li(a: Dict):
+    title = _html.escape(a.get("title", ""))
+    url = a.get("url", "#")
     return (
         f"<li><strong><a href=\"{url}\" target=\"_blank\">{title}</a></strong><br>"
-        f"<p class=\"snippet\">{snippet} <a href=\"{url}\" target=\"_blank\">Voir la suite →</a></p></li>"
+        f"<p class=\"snippet\">{_snippet(a)} <a href=\"{url}\" target=\"_blank\">Voir la suite →</a></p></li>"
     )
 
 
-def get_headlines(code: str) -> List[Dict]:
-    batch: List[Dict] = []
-    for cty in COUNTRY_ROLL:
-        batch.extend(_fetch_top(cty, code))
-    return _dedup(batch)[:5]
-
-
-def build_category_block(hdr: str, code: str) -> str:
-    items = [_fmt_li(a) for a in get_headlines(code)]
+def _top_block(header: str, code: str):
+    arts = []
+    for cty in COUNTRIES:
+        arts.extend(_fetch_top(cty, code))
+    lis = [_fmt_li(a) for a in _dedup(arts)[:5]]
     return _tw.dedent(f"""
         <article>
-            <h2>{hdr}</h2>
+            <h2>{header}</h2>
             <ul>
-                {'\n                '.join(items)}
+                {'\n                '.join(lis)}
             </ul>
         </article>""")
 
 
-def build_client_block(q: str) -> str:
-    params = {
-        "apiKey": API_KEY,
-        "q": q,
-        "language": "en",
-        "pageSize": 5,
-        "sortBy": "publishedAt",
-    }
-    try:
-        data = _r.get(_ENDPOINT_EVERY, params=params, headers=_HEADERS, timeout=15).json()
-        if data.get("status") != "ok":
-            raise RuntimeError(data.get("message", "err"))
-        lis = [_fmt_li(a) for a in data.get("articles", [])[:5]]
-        if not lis:
-            return ""
-        return _tw.dedent(f"""
-            <article>
-                <h2>🔍 Client Watch – {_html.escape(q)}</h2>
-                <ul>
-                    {'\n                    '.join(lis)}
-                </ul>
-            </article>""")
-    except Exception as exc:
-        print(f"⚠️ Client fetch error: {exc}")
+def _client_block(q: str):
+    if not q:
         return ""
+    arts = _api_get(_ENDPOINT_EVERY, q=q, language="en", pageSize=5, sortBy="publishedAt")
+    if not arts:
+        return ""
+    lis = [_fmt_li(a) for a in arts[:5]]
+    return _tw.dedent(f"""
+        <article>
+            <h2>🔍 Client Watch – {_html.escape(q)}</h2>
+            <ul>
+                {'\n                '.join(lis)}
+            </ul>
+        </article>""")
 
 
-def build_daily_brief() -> str:
+def build_brief():
     today = _dt.date.today().strftime("%d %b %Y")
-    parts = [_tw.dedent(f"""
+    parts = [
+        _tw.dedent(f"""
             <article>
                 <h2>🗞️ Daily Brief – {today}</h2>
-            </article>""")]
-    for hdr, code in CATS.items():
-        parts.append(build_category_block(hdr, code))
-    if CLIENT_Q:
-        blk = build_client_block(CLIENT_Q)
-        if blk:
-            parts.append(blk)
+            </article>"""),
+    ]
+    parts.extend(_top_block(h, c) for h, c in CATS.items())
+    cb = _client_block(CLIENT_Q)
+    if cb:
+        parts.append(cb)
     return "\n".join(parts)
 
 
-def inject_into_index(block: str):
-    idx = "index.html"
-    try:
-        html = open(idx, "r", encoding="utf-8").read()
-    except FileNotFoundError:
-        _sys.exit("index.html not found")
+MARKER_START = "<!-- DAILY BRIEF START -->"
+MARKER_END = "<!-- DAILY BRIEF END -->"
 
-    # inject right before closing tag of section with id="posts"
-    m = _re.search(r"</section>\s*<!--\s*posts end\s*-->", html, _re.I)
+
+def inject(block: str):
+    path = "index.html"
+    try:
+        html = open(path, "r", encoding="utf-8").read()
+    except FileNotFoundError:
+        _sys.exit("index.html missing")
+
+    # remove old brief
+    html = _re.sub(f"{MARKER_START}[\s\S]*?{MARKER_END}", "", html, flags=_re.I)
+
+    # find </section> within posts section
+    m = _re.search(r"<section[^>]+id=\"posts\"[\s\S]*?</section>", html, _re.I)
     if not m:
-        # fallback: take first </section> after id="posts"
-        m = _re.search(r"id=\"posts\"[\s\S]*?</section>", html, _re.I)
-        if not m:
-            _sys.exit("<section id='posts'> not found")
-        end_idx = m.end() - len("</section>")
-    else:
-        end_idx = m.start()
-    # retire tout ancien bloc Daily Brief marqué par <!-- DAILY BRIEF -->
-    html = _re.sub(r"<!-- DAILY BRIEF START --[\\s\\S]*?<!-- DAILY BRIEF END -->", "", html, flags=_re.I)
-    block = f"<!-- DAILY BRIEF START -->\n{block}\n<!-- DAILY BRIEF END -->"
-    updated = html[:end_idx] + block + html[end_idx:]
-    open(idx, "w", encoding="utf-8").write(updated)
-    print("✅ Brief injected in #posts")
+        _sys.exit("<section id='posts'> not found")
+    insert_pos = m.end() - len("</section>")
+
+    wrapped = f"{MARKER_START}\n{block}\n{MARKER_END}"
+    new_html = html[:insert_pos] + wrapped + html[insert_pos:]
+    open(path, "w", encoding="utf-8").write(new_html)
+    print("✅ Brief updated (links + snippet) & duplicates removed")
 
 
 if __name__ == "__main__":
-    inject_into_index(build_daily_brief())
+    inject(build_brief())
