@@ -169,7 +169,9 @@ def inject_into_index(block: str):
         end_idx = m.end() - len("</section>")
     else:
         end_idx = m.start()
-
+    # retire tout ancien bloc Daily Brief marqué par <!-- DAILY BRIEF -->
+    html = _re.sub(r"<!-- DAILY BRIEF START --[\\s\\S]*?<!-- DAILY BRIEF END -->", "", html, flags=_re.I)
+    block = f"<!-- DAILY BRIEF START -->\n{block}\n<!-- DAILY BRIEF END -->"
     updated = html[:end_idx] + block + html[end_idx:]
     open(idx, "w", encoding="utf-8").write(updated)
     print("✅ Brief injected in #posts")
