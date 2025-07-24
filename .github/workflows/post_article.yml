@@ -46,8 +46,7 @@ jobs:
 
           blk = f"""            <article>
                 <h2>{title}</h2>
-                <p class="meta">{date} · {read} min read</p>
-{body}
+                <p class="meta">{date} · {read} min read</p>{body}
             </article>\n"""
 
           idx = pathlib.Path("index.html")
