@@ -1,20 +1,17 @@
-on:
-  workflow_dispatch:     # ← autorise le bouton “Run workflow”
-  schedule:
-    # 05:05 UTC = 07:05 Paris chaque jour
-    - cron: '5 5 * * *'
 name: "Daily News Auto‑Post"
 
 on:
+  workflow_dispatch:        # ▶️  Bouton ‘Run workflow’
   schedule:
-    # 05:05 UTC = 07:05 Paris
-    - cron:  '5 5 * * *'
+    # 05:05 UTC = 07:05 Paris
+    - cron: '5 5 * * *'
+
+permissions:
+  contents: write           # autorise le push sur main
 
 jobs:
   news:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # push to main
 
     steps:
       - name: Checkout repo
