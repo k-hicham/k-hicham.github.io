@@ -8,7 +8,7 @@ fetch_news.py – Daily Brief generator for My daily companion
 • Optional extra section "Client Watch" driven by repo variable CLIENT_KEYWORD.
 
 Required secrets / variables in GitHub Actions:
-  NEWS_KEY         – NewsAPI key (secret)
+  NEWS_KEY         – NewsAPI key (secret) 
   CLIENT_KEYWORD   – optional free‑text query for client monitoring (variable)
 """
 import datetime as _dt
