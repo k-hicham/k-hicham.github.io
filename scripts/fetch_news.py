@@ -58,7 +58,7 @@ def _api_get(url: str, **params):
 
 
 def _fetch_top(country: str, category: str):
-    return _api_get(_ENDPOINT_TOP, country=country, category=category, pageSize=20, language="en")
+    return _api_get(_ENDPOINT_TOP, country=country, category=category, pageSize=20, language="fr")
 
 
 def _dedup(arts: List[Dict]):
