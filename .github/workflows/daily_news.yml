@@ -3,3 +3,39 @@ on:
   schedule:
     # 05:05 UTC = 07:05 Paris chaque jour
     - cron: '5 5 * * *'
+name: "Daily News Auto‑Post"
+
+on:
+  schedule:
+    # 05:05 UTC = 07:05 Paris
+    - cron:  '5 5 * * *'
+
+jobs:
+  news:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push to main
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install requirements
+        run: pip install requests
+
+      - name: Fetch & inject headlines
+        env:
+          NEWS_KEY: ${{ secrets.NEWS_KEY }}
+        run: python scripts/fetch_news.py
+
+      - name: Commit & push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No changes – skip commit."
+            exit 0
+          fi
+          git add index.html
+          git commit -m "chore: daily news update"
+          git push
