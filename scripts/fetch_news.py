@@ -16,6 +16,7 @@ import html as _html
 import os as _os
 import sys as _sys
 import textwrap as _tw
+import re as _re
 from typing import List, Dict
 
 import requests as _r
@@ -159,21 +160,19 @@ def build_daily_brief() -> str:
 def inject_into_index(block: str):
     idx_path = "index.html"
     try:
-        with open(idx_path, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = open(idx_path, "r", encoding="utf-8").read()
     except FileNotFoundError:
         _sys.exit("index.html not found at repo root")
 
-    insert_pos = html.lower().rfind("</section>")
-    if insert_pos == -1:
-        _sys.exit("</section> tag not found in index.html; cannot inject news block")
+    # Cherche la balise fermante de la SECTION posts
+    match = _re.search(r'(<section[^>]+id=["\\\']posts[\"\\\'][\\s\\S]*?</section>)', html, _re.IGNORECASE)
+    if not match:
+        _sys.exit("⛔ <section id=\"posts\">…</section> not found")
 
-    updated = html[:insert_pos] + block + html[insert_pos:]
+    end_tag = match.end() - len("</section>")
+    updated = html[:end_tag] + block + html[end_tag:]
+
     with open(idx_path, "w", encoding="utf-8") as f:
         f.write(updated)
-    print("✅ index.html updated")
 
-
-if __name__ == "__main__":
-    brief_block = build_daily_brief()
-    inject_into_index(brief_block)
+    print("✅ index.html updated in <section id=\"posts\">")
