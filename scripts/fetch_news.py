@@ -1,128 +1,193 @@
 #!/usr/bin/env python3
 """
-fetch_news.py – Daily Brief from Swiss / EU RSS (no API limit)
+fetch_news.py  –  Daily Brief (Swiss / EU RSS) + GNews fallback
+
+• Pulls up to 5 articles per category:
+      World Politics · Tech & AI · Finance & Economy · Innovation
+  from curated Swiss / EU RSS feeds.
+• If an RSS feed returns 0 items, the script falls back to GNews
+  (free 300 req/day) using secret  GNEWS_KEY  and a simple keyword.
+• Optional “Client Watch” block driven by variable  CLIENT_KEYWORD
+  (or by passing an argument in the workflow).
+• Injects/updates inside <section id="posts"> in  index.html.
+  If that section doesn’t exist, it injects before </main>.
+• Old brief (bounded by HTML comments) is removed automatically,
+  so the block never duplicates.
 """
 
-import datetime as dt, html, os, re, sys, textwrap as tw, feedparser
-print("🛠️  Daily‑Brief SCRIPT VERSION:", "RSS + GNews FALLBACK v3")
+import datetime as dt
+import html, os, re, sys, textwrap as tw
 
-GNEWS_KEY = os.getenv("GNEWS_KEY", "").strip()
-GNEWS_API  = "https://gnews.io/api/v4/search?q={q}&lang={lang}&country=ch&token=" + GNEWS_KEY
+import feedparser         # pip install feedparser
+import requests           # only needed for GNews fallback; already in runner
 
+###############################################################################
+#  CONFIGURE YOUR SOURCES HERE
+###############################################################################
 
 CATS = {
     "World Politics": [
-        # RSS feeds covering EU / Swiss politics
-        "https://www.swissinfo.ch/service/rss/rss?cid=44628456",          # swissinfo.ch politics
-        "https://www.letemps.ch/rss/feed",                                # Le Temps
-        "https://www.ft.com/world/europe?format=rss"                      # FT Europe
+        "https://www.swissinfo.ch/service/rss/rss?cid=44628456",
+        "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
     ],
     "Tech & AI": [
-        "https://www.handelszeitung.ch/taxonomy/term/14774/feed",         # Handelszeitung Digital
-        "https://www.nzz.ch/digital.rss"                                  # NZZ Digital
+        "https://www.nzz.ch/digital.rss",
+        "https://www.handelszeitung.ch/taxonomy/term/14774/feed",
     ],
     "Finance & Economy": [
+        "https://www.nzz.ch/wirtschaft.rss",
         "https://www.handelsblatt.com/contentexport/feed/finance.rss",
-        "https://www.nzz.ch/wirtschaft.rss"
     ],
     "Innovation": [
-        "https://www.swissinfo.ch/service/rss/rss?cid=41842338",          # Innovation (swissinfo)
-        "https://www.sciencealert.com/feed"                               # ScienceAlert EU friendly
+        "https://www.sciencenews.org/feed",
+        "https://www.swissinfo.ch/service/rss/rss?cid=41842338",
     ],
 }
 
-CLIENT_QUERY = sys.argv[1] if len(sys.argv) > 1 else ""  # you can pass keyword in workflow args
+###############################################################################
+#  OPTIONAL CLIENT WATCH
+###############################################################################
 
-def _fmt_item(entry):
+CLIENT_QUERY = os.getenv("CLIENT_KEYWORD", "").strip()
+# (you can also pass it as sys.argv[1] in the workflow step if you prefer)
+if len(sys.argv) > 1:
+    CLIENT_QUERY = " ".join(sys.argv[1:])
+
+###############################################################################
+#  GNEWS FALLBACK  (needs free API key  https://gnews.io)
+###############################################################################
+
+GNEWS_KEY = os.getenv("GNEWS_KEY", "").strip()
+GNEWS_URL = (
+    "https://gnews.io/api/v4/search?"
+    "q={q}&lang={lang}&country=ch&max=10&token=" + GNEWS_KEY
+)
+
+###############################################################################
+#  DEBUG switch – set to True to print feed counts in the log
+###############################################################################
+DEBUG = False
+
+# --------------------------------------------------------------------------- #
+
+def _fmt(entry) -> str:
+    """Format one feedparser entry into a <li>"""
     title = html.escape(entry.title)
     link  = entry.link
-    snippet = html.escape(re.sub("<[^>]+>", "", entry.get("summary", "")))[:260]
-    return f"<li><strong><a href=\"{link}\" target=\"_blank\">{title}</a></strong><br><p class=\"snippet\">{snippet} <a href=\"{link}\" target=\"_blank\">Voir la suite →</a></p></li>"
+    raw   = entry.get("summary", "") or entry.get("description", "")
+    snippet = html.escape(re.sub("<[^>]+>", "", raw))[:260]
+    return (
+        f"<li><strong><a href=\"{link}\" target=\"_blank\">{title}</a></strong><br>"
+        f"<p class=\"snippet\">{snippet} "
+        f"<a href=\"{link}\" target=\"_blank\">Voir la suite →</a></p></li>"
+    )
 
-def _gnews_entries(query, lang="en"):
-    """Fallback: grab up to 5 items from GNews when an RSS feed is empty."""
+
+def _gnews_fallback(keyword: str, lang: str = "en"):
+    """Return up to 5 entries from GNews for the given keyword."""
     if not GNEWS_KEY:
-        return []  # token not set
-    url = GNEWS_API.format(q=query, lang=lang)
-    return feedparser.parse(url).entries[:5]
+        return []  # Key not set → skip fallback
+    url = GNEWS_URL.format(q=keyword, lang=lang)
+    feed = feedparser.parse(url)
+    if DEBUG:
+        print(f"GNews {keyword!r} → {len(feed.entries)} items")
+    return feed.entries[:5]
 
-def section(name, feeds):
-    seen, items_html = set(), []
+
+def _section(name: str, feeds: list[str]) -> str:
+    """Build one category block, using fallback if necessary."""
+    seen, items = set(), []
+
     for url in feeds:
-        entries = feedparser.parse(url).entries[:10]
-        print(f"CHECK  {url}  →  {len(entries)} items")          # ← add
-        if not entries:
-            print("  ↳ empty, using GNews fallback")             # ← add
-            entries = _gnews_entries(name.split()[0])
-            print(f"    GNews returned {len(entries)} items")    # ← add
+        fp = feedparser.parse(url)
+        if DEBUG:
+            print(f"RSS  {url} → {len(fp.entries)} items")
+        entries = fp.entries[:10] or _gnews_fallback(name.split()[0])
         for e in entries:
-            if e.title in seen: continue
+            if e.title in seen:
+                continue
             seen.add(e.title)
-            items_html.append(_fmt_item(e))
-            if len(items_html) == 5: break
-        if len(items_html) == 5: break
-    print(f"»» {name} final count: {len(items_html)}")           # ← add
-    return tw.dedent(f"""
+            items.append(_fmt(e))
+            if len(items) == 5:
+                break
+        if len(items) == 5:
+            break
+
+    if DEBUG:
+        print(f"»» {name} final = {len(items)}")
+
+    if not items:
+        return ""  # skip empty category completely
+
+    return tw.dedent(
+        f"""
         <article>
             <h2>{name}</h2>
             <ul>
-                {'\\n                '.join(items_html)}
+                {'\\n                '.join(items)}
             </ul>
-        </article>""")
+        </article>
+        """
+    )
 
 
-def client_block(q):
-    if not q: return ""
-    gnews = f"https://gnews.io/api/v4/search?q={q}&lang=en&country=ch&token=demo"  # replace demo with your token if you want
-    entries = feedparser.parse(gnews).entries[:5]
-    if not entries: return ""
-    lis = [_fmt_item(e) for e in entries]
-    return tw.dedent(f"""
+def _client_block(q: str) -> str:
+    if not q:
+        return ""
+    entries = _gnews_fallback(q)
+    if not entries:
+        return ""
+    lis = [_fmt(e) for e in entries]
+    return tw.dedent(
+        f"""
         <article>
-            <h2>🔍 Client Watch – {html.escape(q)}</h2>
+            <h2>🔍 Client Watch – {html.escape(q)}</h2>
             <ul>
                 {'\\n                '.join(lis)}
             </ul>
-        </article>""")
-
-def build_brief():
-    today = dt.date.today().strftime("%d %b %Y")
-    parts = [f"<article><h2>🗞️ Daily Brief – {today}</h2></article>"]
-    parts += [section(h, f) for h, f in CATS.items()]
-    if CLIENT_QUERY:
-        parts.append(client_block(CLIENT_QUERY))
-    return "\\n".join(parts)
-
-# --- inject into index.html (same logic as before) ------------------------
-# ── replace the old inject() with this version ────────────────────────────────
-def inject(block: str):
-    """Insert DAILY BRIEF; tolerant if <section id="posts"> is absent."""
-    START, END = "<!-- DAILY BRIEF START -->", "<!-- DAILY BRIEF END -->"
-
-    try:
-        html = open("index.html", encoding="utf-8").read()
-    except FileNotFoundError:
-        sys.exit("index.html missing")
-
-    # remove previous brief
-    html = re.sub(f"{START}[\\s\\S]*?{END}", "", html, flags=re.I)
-
-    # 1️⃣ try inside section id="posts"
-    match = re.search(
-        r'<section[^>]*id=[\'"]posts[\'"][\\s\\S]*?</section>',
-        html,
-        re.I,
+        </article>
+        """
     )
-    if match:
-        insert_at = match.end() - len("</section>")
-    else:
-        # 2️⃣ fallback: just before closing </main> (or EOF)
-        m2 = html.lower().rfind("</main>")
-        insert_at = m2 if m2 != -1 else len(html)
-        print("⚠️  id='posts' not found – using fallback position")
 
-    wrapped = f"{START}\n{block}\n{END}"
-    new_html = html[:insert_at] + wrapped + html[insert_at:]
-    open("index.html", "w", encoding="utf-8").write(new_html)
-    print("✅ Daily Brief injected successfully")
 
+def build_brief() -> str:
+    today = dt.date.today().strftime("%d %b %Y")
+    parts = [f"<article><h2>🗞️ Daily Brief – {today}</h2></article>"]
+    for hdr, feeds in CATS.items():
+        blk = _section(hdr, feeds)
+        if blk:
+            parts.append(blk)
+    cb = _client_block(CLIENT_QUERY)
+    if cb:
+        parts.append(cb)
+    return "\n".join(parts) if len(parts) > 1 else ""
+
+
+# -------- inject into index.html ------------------------------------------ #
+START, END = "<!-- DAILY BRIEF START -->", "<!-- DAILY BRIEF END -->"
+
+try:
+    html_txt = open("index.html", encoding="utf-8").read()
+except FileNotFoundError:
+    sys.exit("index.html missing")
+
+# remove previous brief
+html_txt = re.sub(f"{START}[\\s\\S]*?{END}", "", html_txt, flags=re.I)
+
+brief_html = build_brief() or "<p><em>(No news fetched)</em></p>"
+wrapped = f"{START}\n{brief_html}\n{END}"
+
+# inject inside <section id="posts"> or fall back to </main>
+m = re.search(r'<section[^>]*id=[\'"]posts[\'"][\\s\\S]*?</section>', html_txt, re.I)
+if m:
+    insert_at = m.end() - len("</section>")
+else:
+    if DEBUG:
+        print("⚠️ id='posts' not found – inserting before </main>")
+    end_main = html_txt.lower().rfind("</main>")
+    insert_at = end_main if end_main != -1 else len(html_txt)
+
+new_html = html_txt[:insert_at] + wrapped + html_txt[insert_at:]
+open("index.html", "w", encoding="utf-8").write(new_html)
+
+print("✅ Daily Brief injected –", len(brief_html), "chars")
