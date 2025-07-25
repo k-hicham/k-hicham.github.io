@@ -1,161 +1,87 @@
 #!/usr/bin/env python3
 """
-fetch_news.py – Daily Brief generator for My daily companion (v2.1)
-------------------------------------------------------------------
-• Builds a daily brief with clickable titles, snippet, « Voir la suite → »
-  and an optional “Client Watch” section (driven by CLIENT_KEYWORD variable).
-• Injects the brief *inside* <section id="posts"> and first removes any
-  previous brief (bounded by HTML comments) to avoid duplication.
-
-Environment expected by the GitHub Action
-----------------------------------------
-NEWS_KEY (secret)         – NewsAPI.org API key
-CLIENT_KEYWORD (variable) – optional free‑text query (e.g. Purina OR "Nestlé Purina")
+fetch_news.py – Daily Brief from Swiss / EU RSS (no API limit)
 """
-import datetime as _dt
-import html as _html
-import os as _os
-import re as _re
-import sys as _sys
-import textwrap as _tw
-from typing import Dict, List
 
-import requests as _r
-
-API_KEY = _os.getenv("NEWS_KEY")
-if not API_KEY:
-    _sys.exit("❌ NEWS_KEY secret missing – add it as a repo secret")
-
-CLIENT_Q = _os.getenv("CLIENT_KEYWORD", "").strip()
+import datetime as dt, html, re, sys, textwrap as tw, feedparser
 
 CATS = {
-    "World Politics": "general",
-    "Tech & AI": "technology",
-    "Finance & Economy": "business",
-    "Innovation": "science",
+    "World Politics": [
+        # RSS feeds covering EU / Swiss politics
+        "https://www.swissinfo.ch/service/rss/rss?cid=44628456",          # swissinfo.ch politics
+        "https://www.letemps.ch/rss/feed",                                # Le Temps
+        "https://www.ft.com/world/europe?format=rss"                      # FT Europe
+    ],
+    "Tech & AI": [
+        "https://www.handelszeitung.ch/taxonomy/term/14774/feed",         # Handelszeitung Digital
+        "https://www.nzz.ch/digital.rss"                                  # NZZ Digital
+    ],
+    "Finance & Economy": [
+        "https://www.handelsblatt.com/contentexport/feed/finance.rss",
+        "https://www.nzz.ch/wirtschaft.rss"
+    ],
+    "Innovation": [
+        "https://www.swissinfo.ch/service/rss/rss?cid=41842338",          # Innovation (swissinfo)
+        "https://www.sciencealert.com/feed"                               # ScienceAlert EU friendly
+    ],
 }
 
-_US = ["us"]
-_EU = ["gb", "fr", "de", "it", "es", "nl"]
-COUNTRIES = _US + _EU
+CLIENT_QUERY = sys.argv[1] if len(sys.argv) > 1 else ""  # you can pass keyword in workflow args
 
-_ENDPOINT_TOP = "https://newsapi.org/v2/top-headlines"
-_ENDPOINT_EVERY = "https://newsapi.org/v2/everything"
-_HEADERS = {"User-Agent": "daily-brief-bot/2.1"}
+def _fmt_item(entry):
+    title = html.escape(entry.title)
+    link  = entry.link
+    snippet = html.escape(re.sub("<[^>]+>", "", entry.get("summary", "")))[:260]
+    return f"<li><strong><a href=\"{link}\" target=\"_blank\">{title}</a></strong><br><p class=\"snippet\">{snippet} <a href=\"{link}\" target=\"_blank\">Voir la suite →</a></p></li>"
 
-
-def _api_get(url: str, **params):
-    params["apiKey"] = API_KEY
-    try:
-        r = _r.get(url, params=params, headers=_HEADERS, timeout=12)
-        data = r.json()
-        if data.get("status") != "ok":
-            raise RuntimeError(data.get("message", "unk error"))
-        return data["articles"]
-    except Exception as exc:
-        print(f"⚠️ API error {url}: {exc}")
-        return []
-
-
-def _fetch_top(country: str, category: str):
-    return _api_get(_ENDPOINT_TOP, country=country, category=category, pageSize=20, language="fr")
-
-
-def _dedup(arts: List[Dict]):
-    out, seen = [], set()
-    for a in arts:
-        t = a.get("title")
-        if t and t not in seen:
-            seen.add(t)
-            out.append(a)
-    return out
-
-
-def _snippet(a: Dict):
-    raw = a.get("description") or a.get("content") or ""
-    raw = raw.split("[+")[0].strip()
-    return _html.escape(raw[:260])
-
-
-def _fmt_li(a: Dict):
-    title = _html.escape(a.get("title", ""))
-    url = a.get("url", "#")
-    return (
-        f"<li><strong><a href=\"{url}\" target=\"_blank\">{title}</a></strong><br>"
-        f"<p class=\"snippet\">{_snippet(a)} <a href=\"{url}\" target=\"_blank\">Voir la suite →</a></p></li>"
-    )
-
-
-def _top_block(header: str, code: str):
-    arts = []
-    for cty in COUNTRIES:
-        arts.extend(_fetch_top(cty, code))
-    lis = [_fmt_li(a) for a in _dedup(arts)[:5]]
-    return _tw.dedent(f"""
+def section(name, feeds):
+    seen = set()
+    items_html = []
+    for url in feeds:
+        for e in feedparser.parse(url).entries[:10]:
+            if e.title in seen: continue
+            seen.add(e.title)
+            items_html.append(_fmt_item(e))
+            if len(items_html) == 5: break
+        if len(items_html) == 5: break
+    return tw.dedent(f"""
         <article>
-            <h2>{header}</h2>
+            <h2>{name}</h2>
             <ul>
-                {'\n                '.join(lis)}
+                {'\\n                '.join(items_html)}
             </ul>
         </article>""")
 
-
-def _client_block(q: str):
-    if not q:
-        return ""
-    arts = _api_get(_ENDPOINT_EVERY, q=q, language="en", pageSize=5, sortBy="publishedAt")
-    if not arts:
-        return ""
-    lis = [_fmt_li(a) for a in arts[:5]]
-    return _tw.dedent(f"""
+def client_block(q):
+    if not q: return ""
+    gnews = f"https://gnews.io/api/v4/search?q={q}&lang=en&country=ch&token=demo"  # replace demo with your token if you want
+    entries = feedparser.parse(gnews).entries[:5]
+    if not entries: return ""
+    lis = [_fmt_item(e) for e in entries]
+    return tw.dedent(f"""
         <article>
-            <h2>🔍 Client Watch – {_html.escape(q)}</h2>
+            <h2>🔍 Client Watch – {html.escape(q)}</h2>
             <ul>
-                {'\n                '.join(lis)}
+                {'\\n                '.join(lis)}
             </ul>
         </article>""")
-
 
 def build_brief():
-    today = _dt.date.today().strftime("%d %b %Y")
-    parts = [
-        _tw.dedent(f"""
-            <article>
-                <h2>🗞️ Daily Brief – {today}</h2>
-            </article>"""),
-    ]
-    parts.extend(_top_block(h, c) for h, c in CATS.items())
-    cb = _client_block(CLIENT_Q)
-    if cb:
-        parts.append(cb)
-    return "\n".join(parts)
+    today = dt.date.today().strftime("%d %b %Y")
+    parts = [f"<article><h2>🗞️ Daily Brief – {today}</h2></article>"]
+    parts += [section(h, f) for h, f in CATS.items()]
+    if CLIENT_QUERY:
+        parts.append(client_block(CLIENT_QUERY))
+    return "\\n".join(parts)
 
-
-MARKER_START = "<!-- DAILY BRIEF START -->"
-MARKER_END = "<!-- DAILY BRIEF END -->"
-
-
-def inject(block: str):
-    path = "index.html"
-    try:
-        html = open(path, "r", encoding="utf-8").read()
-    except FileNotFoundError:
-        _sys.exit("index.html missing")
-
-    # remove old brief
-    html = _re.sub(f"{MARKER_START}[\s\S]*?{MARKER_END}", "", html, flags=_re.I)
-
-    # find </section> within posts section
-    m = _re.search(r"<section[^>]+id=\"posts\"[\s\S]*?</section>", html, _re.I)
-    if not m:
-        _sys.exit("<section id='posts'> not found")
-    insert_pos = m.end() - len("</section>")
-
-    wrapped = f"{MARKER_START}\n{block}\n{MARKER_END}"
-    new_html = html[:insert_pos] + wrapped + html[insert_pos:]
-    open(path, "w", encoding="utf-8").write(new_html)
-    print("✅ Brief updated (links + snippet) & duplicates removed")
-
-
-if __name__ == "__main__":
-    inject(build_brief())
+# --- inject into index.html (same logic as before) ------------------------
+START, END = "<!-- DAILY BRIEF START -->", "<!-- DAILY BRIEF END -->"
+html_txt = open("index.html", encoding="utf-8").read()
+html_txt = re.sub(f"{START}[\\s\\S]*?{END}", "", html_txt, flags=re.I)
+m = re.search(r"<section[^>]+id=\"posts\"[\\s\\S]*?</section>", html_txt, re.I)
+if not m:
+    sys.exit("id='posts' not found")
+insert = m.end() - len("</section>")
+new_html = html_txt[:insert] + f"{START}\\n{build_brief()}\\n{END}" + html_txt[insert:]
+open("index.html", "w", encoding="utf-8").write(new_html)
+print("✅ Daily Brief injected from RSS feeds")
