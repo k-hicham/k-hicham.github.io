@@ -75,13 +75,35 @@ def build_brief():
     return "\\n".join(parts)
 
 # --- inject into index.html (same logic as before) ------------------------
-START, END = "<!-- DAILY BRIEF START -->", "<!-- DAILY BRIEF END -->"
-html_txt = open("index.html", encoding="utf-8").read()
-html_txt = re.sub(f"{START}[\\s\\S]*?{END}", "", html_txt, flags=re.I)
-m = re.search(r'<section[^>]*id=["\\\']posts["\\\'][\\s\\S]*?</section>', html_txt, re.I)
-if not m:
-    sys.exit("id='posts' not found")
-insert = m.end() - len("</section>")
-new_html = html_txt[:insert] + f"{START}\\n{build_brief()}\\n{END}" + html_txt[insert:]
-open("index.html", "w", encoding="utf-8").write(new_html)
-print("✅ Daily Brief injected from RSS feeds")
+# ── replace the old inject() with this version ────────────────────────────────
+def inject(block: str):
+    """Insert DAILY BRIEF; tolerant if <section id="posts"> is absent."""
+    START, END = "<!-- DAILY BRIEF START -->", "<!-- DAILY BRIEF END -->"
+
+    try:
+        html = open("index.html", encoding="utf-8").read()
+    except FileNotFoundError:
+        sys.exit("index.html missing")
+
+    # remove previous brief
+    html = re.sub(f"{START}[\\s\\S]*?{END}", "", html, flags=re.I)
+
+    # 1️⃣ try inside section id="posts"
+    match = re.search(
+        r'<section[^>]*id=[\'"]posts[\'"][\\s\\S]*?</section>',
+        html,
+        re.I,
+    )
+    if match:
+        insert_at = match.end() - len("</section>")
+    else:
+        # 2️⃣ fallback: just before closing </main> (or EOF)
+        m2 = html.lower().rfind("</main>")
+        insert_at = m2 if m2 != -1 else len(html)
+        print("⚠️  id='posts' not found – using fallback position")
+
+    wrapped = f"{START}\n{block}\n{END}"
+    new_html = html[:insert_at] + wrapped + html[insert_at:]
+    open("index.html", "w", encoding="utf-8").write(new_html)
+    print("✅ Daily Brief injected successfully")
+
