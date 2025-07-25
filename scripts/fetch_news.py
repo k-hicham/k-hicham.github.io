@@ -4,6 +4,7 @@ fetch_news.py – Daily Brief from Swiss / EU RSS (no API limit)
 """
 
 import datetime as dt, html, os, re, sys, textwrap as tw, feedparser
+print("🛠️  Daily‑Brief SCRIPT VERSION:", "RSS + GNews FALLBACK v3")
 
 GNEWS_KEY = os.getenv("GNEWS_KEY", "").strip()
 GNEWS_API  = "https://gnews.io/api/v4/search?q={q}&lang={lang}&country=ch&token=" + GNEWS_KEY
