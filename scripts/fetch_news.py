@@ -78,7 +78,7 @@ def build_brief():
 START, END = "<!-- DAILY BRIEF START -->", "<!-- DAILY BRIEF END -->"
 html_txt = open("index.html", encoding="utf-8").read()
 html_txt = re.sub(f"{START}[\\s\\S]*?{END}", "", html_txt, flags=re.I)
-m = re.search(r"<section[^>]+id=\"posts\"[\\s\\S]*?</section>", html_txt, re.I)
+m = re.search(r'<section[^>]*id=["\\\']posts["\\\'][\\s\\S]*?</section>', html_txt, re.I)
 if not m:
     sys.exit("id='posts' not found")
 insert = m.end() - len("</section>")
