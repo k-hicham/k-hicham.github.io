@@ -3,7 +3,11 @@
 fetch_news.py – Daily Brief from Swiss / EU RSS (no API limit)
 """
 
-import datetime as dt, html, re, sys, textwrap as tw, feedparser
+import datetime as dt, html, os, re, sys, textwrap as tw, feedparser
+
+GNEWS_KEY = os.getenv("GNEWS_KEY", "").strip()
+GNEWS_API  = "https://gnews.io/api/v4/search?q={q}&lang={lang}&country=ch&token=" + GNEWS_KEY
+
 
 CATS = {
     "World Politics": [
@@ -34,11 +38,20 @@ def _fmt_item(entry):
     snippet = html.escape(re.sub("<[^>]+>", "", entry.get("summary", "")))[:260]
     return f"<li><strong><a href=\"{link}\" target=\"_blank\">{title}</a></strong><br><p class=\"snippet\">{snippet} <a href=\"{link}\" target=\"_blank\">Voir la suite →</a></p></li>"
 
+def _gnews_entries(query, lang="en"):
+    """Fallback: grab up to 5 items from GNews when an RSS feed is empty."""
+    if not GNEWS_KEY:
+        return []  # token not set
+    url = GNEWS_API.format(q=query, lang=lang)
+    return feedparser.parse(url).entries[:5]
+
 def section(name, feeds):
-    seen = set()
-    items_html = []
+    seen, items_html = set(), []
     for url in feeds:
-        for e in feedparser.parse(url).entries[:10]:
+        entries = feedparser.parse(url).entries[:10]
+        if not entries:               # RSS empty → fallback
+            entries = _gnews_entries(name.split()[0])   # simple keyword
+        for e in entries:
             if e.title in seen: continue
             seen.add(e.title)
             items_html.append(_fmt_item(e))
