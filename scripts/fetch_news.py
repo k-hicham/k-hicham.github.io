@@ -50,16 +50,18 @@ def section(name, feeds):
     seen, items_html = set(), []
     for url in feeds:
         entries = feedparser.parse(url).entries[:10]
-        print(f"CHECK {url} → {len(entries)} items")
-        if not entries:               # RSS empty → fallback
-            print("  ↳ fallback GNews…")
-            entries = _gnews_entries(name.split()[0])   # simple keyword
+        print(f"CHECK  {url}  →  {len(entries)} items")          # ← add
+        if not entries:
+            print("  ↳ empty, using GNews fallback")             # ← add
+            entries = _gnews_entries(name.split()[0])
+            print(f"    GNews returned {len(entries)} items")    # ← add
         for e in entries:
             if e.title in seen: continue
             seen.add(e.title)
             items_html.append(_fmt_item(e))
             if len(items_html) == 5: break
         if len(items_html) == 5: break
+    print(f"»» {name} final count: {len(items_html)}")           # ← add
     return tw.dedent(f"""
         <article>
             <h2>{name}</h2>
@@ -67,6 +69,7 @@ def section(name, feeds):
                 {'\\n                '.join(items_html)}
             </ul>
         </article>""")
+
 
 def client_block(q):
     if not q: return ""
