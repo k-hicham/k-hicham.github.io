@@ -17,8 +17,8 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install requirements
-        run: pip install requests
+      - name: Install requirements          # <── tweak here
+        run: pip install feedparser requests
 
       - name: Fetch & inject headlines
         env:
