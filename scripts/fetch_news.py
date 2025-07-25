@@ -50,7 +50,9 @@ def section(name, feeds):
     seen, items_html = set(), []
     for url in feeds:
         entries = feedparser.parse(url).entries[:10]
+        print(f"CHECK {url} → {len(entries)} items")
         if not entries:               # RSS empty → fallback
+            print("  ↳ fallback GNews…")
             entries = _gnews_entries(name.split()[0])   # simple keyword
         for e in entries:
             if e.title in seen: continue
